@@ -7,7 +7,9 @@ from google.genai import types
 from pydantic import BaseModel, Field
 
 
-class AssistantResult(BaseModel):
+# ============================================================
+
+class ModelExtraction(BaseModel):
     intent: Literal[
         "search_medicine",
         "pharmacy_locator",
@@ -23,6 +25,73 @@ class AssistantResult(BaseModel):
     symptoms: list[str] = Field(default_factory=list)
     user_message: str = ""
     requires_location: bool = False
+
+
+# ============================================================
+# هذا هو الشكل النهائي اللي بيرجع من analyze_message().
+# نفس حقول ModelExtraction + حقل guidance الجديد.
+# ============================================================
+class AssistantResult(ModelExtraction):
+    guidance: Optional[str] = None
+
+
+# ============================================================
+# قاموس إرشادات ثابتة، مراجَعة مسبقًا لكل عرض من الأعراض
+# الموحّدة المعرّفة أصلاً بالـ system prompt تحت.
+# عدّل النصوص هون حسب المراجعة الطبية عندكم.
+# ============================================================
+SYMPTOM_GUIDANCE: dict[str, str] = {
+    "ألم في البطن": (
+        "حاول ترتاح وتجنب الأكل الثقيل والحار، واشرب سوائل دافئة. "
+        "إذا اشتد الألم فجأة، أو ترافق مع دم بالبراز أو قيء مستمر، راجع طبيب فورًا."
+    ),
+    "صداع": (
+        "خذ قسط من الراحة بمكان هادئ ومظلم، واشرب سوائل كافية. "
+        "إذا كان الصداع مفاجئ وشديد جدًا، أو ترافق مع تصلب بالرقبة أو اضطراب بالرؤية، راجع الطوارئ فورًا."
+    ),
+    "حرارة": (
+        "احرص على الراحة وشرب سوائل كثيرة، وراقب درجة الحرارة بشكل دوري. "
+        "إذا استمرت أكثر من يومين، أو تجاوزت 39 درجة، أو ترافقت مع طفح جلدي، راجع طبيب."
+    ),
+    "دوخة": (
+        "اجلس أو استلقِ فورًا لتجنب السقوط، وتجنب الوقوف المفاجئ. "
+        "إذا ترافقت مع ألم صدر أو فقدان وعي، راجع الطوارئ فورًا."
+    ),
+    "تقيؤ": (
+        "اشرب سوائل بكميات صغيرة ومتكررة لتجنب الجفاف. "
+        "إذا استمر أكثر من يوم، أو ظهر دم، راجع طبيب."
+    ),
+    "سعال": (
+        "اشرب سوائل دافئة وارتح، وتجنب الأماكن المزدحمة بالدخان أو الغبار. "
+        "إذا استمر أكثر من أسبوع، أو ترافق مع ضيق تنفس أو دم، راجع طبيب."
+    ),
+    "ضيق تنفس": (
+        "هذا عرض قد يكون خطيرًا ولا يجب تجاهله. "
+        "إذا كان شديدًا أو مفاجئًا، توجه للطوارئ فورًا ولا تنتظر."
+    ),
+}
+
+# نص عام آمن لأي عرض غير موجود بالقاموس أعلاه
+GENERIC_FALLBACK_GUIDANCE = (
+    "يُنصح بمراقبة العرض عن قرب. إذا استمر أو ازداد سوءًا، "
+    "أو ترافق مع أعراض أخرى مقلقة، يرجى مراجعة طبيب أو صيدلي في أقرب وقت."
+)
+
+
+def build_guidance(symptoms: list[str]) -> Optional[str]:
+    """
+    بيبني نص الإرشاد النهائي من قائمة الأعراض المستخرجة.
+    كل عرض بيرجع نص ثابت من القاموس، أو fallback عام لو مش موجود.
+    """
+    if not symptoms:
+        return None
+
+    parts = [SYMPTOM_GUIDANCE.get(symptom, GENERIC_FALLBACK_GUIDANCE) for symptom in symptoms]
+
+    # إزالة التكرار لو أكتر من عرض رجعوا نفس نص الـ fallback العام
+    unique_parts = list(dict.fromkeys(parts))
+
+    return " ".join(unique_parts)
 
 
 SYSTEM_PROMPT = """
@@ -222,7 +291,8 @@ def analyze_message(message: str, max_retries: int = 3):
             drug_name=None,
             symptoms=[],
             user_message="وضح طلبك من فضلك.",
-            requires_location=False
+            requires_location=False,
+            guidance=None
         ).model_dump()
 
     client = get_client()
@@ -240,13 +310,21 @@ def analyze_message(message: str, max_retries: int = 3):
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_PROMPT,
                     response_mime_type="application/json",
-                    response_schema=AssistantResult
+                    response_schema=ModelExtraction
                 )
             )
 
-            result = AssistantResult.model_validate_json(
+            extraction = ModelExtraction.model_validate_json(
                 response.text
             )
+
+            result = AssistantResult(
+                **extraction.model_dump(),
+                guidance=None
+            )
+
+            if result.intent == "symptom_guidance":
+                result.guidance = build_guidance(result.symptoms)
 
             return result.model_dump()
 
