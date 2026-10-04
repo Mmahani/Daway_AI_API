@@ -4,6 +4,7 @@ from typing import Optional, Literal
 
 from google import genai
 from google.genai import types
+from openai import OpenAI
 from pydantic import BaseModel, Field
 
 
@@ -27,18 +28,13 @@ class ModelExtraction(BaseModel):
     requires_location: bool = False
 
 
-# ============================================================
-# هذا هو الشكل النهائي اللي بيرجع من analyze_message().
-# نفس حقول ModelExtraction + حقل guidance الجديد.
-# ============================================================
+
 class AssistantResult(ModelExtraction):
     guidance: Optional[str] = None
 
 
 # ============================================================
 # قاموس إرشادات ثابتة، مراجَعة مسبقًا لكل عرض من الأعراض
-# الموحّدة المعرّفة أصلاً بالـ system prompt تحت.
-# عدّل النصوص هون حسب المراجعة الطبية عندكم.
 # ============================================================
 SYMPTOM_GUIDANCE: dict[str, str] = {
     "ألم في البطن": (
@@ -88,7 +84,7 @@ def build_guidance(symptoms: list[str]) -> Optional[str]:
 
     parts = [SYMPTOM_GUIDANCE.get(symptom, GENERIC_FALLBACK_GUIDANCE) for symptom in symptoms]
 
-    # إزالة التكرار لو أكتر من عرض رجعوا نفس نص الـ fallback العام
+    
     unique_parts = list(dict.fromkeys(parts))
 
     return " ".join(unique_parts)
@@ -271,7 +267,7 @@ Examples:
 """
 
 
-def get_client():
+def get_gemini_client():
     api_key = os.getenv("GEMINI_API_KEY")
 
     if not api_key:
@@ -280,6 +276,62 @@ def get_client():
         )
 
     return genai.Client(api_key=api_key)
+
+
+def get_deepseek_client():
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+
+    if not api_key:
+        raise RuntimeError(
+            "DEEPSEEK_API_KEY is not configured"
+        )
+
+    return OpenAI(
+        api_key=api_key,
+        base_url="https://api.deepseek.com"
+    )
+
+
+def call_gemini(message: str) -> ModelExtraction:
+    client = get_gemini_client()
+
+    model_name = os.getenv(
+        "GEMINI_MODEL",
+        "gemini-3.6-flash"
+    )
+
+    response = client.models.generate_content(
+        model=model_name,
+        contents=message,
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            response_mime_type="application/json",
+            response_schema=ModelExtraction
+        )
+    )
+
+    return ModelExtraction.model_validate_json(response.text)
+
+
+def call_deepseek(message: str) -> ModelExtraction:
+    client = get_deepseek_client()
+
+    model_name = os.getenv(
+        "DEEPSEEK_MODEL",
+        "deepseek-flash"
+    )
+
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": message}
+        ],
+        response_format={"type": "json_object"}
+    )
+
+    raw_json = response.choices[0].message.content
+    return ModelExtraction.model_validate_json(raw_json)
 
 
 def analyze_message(message: str, max_retries: int = 3):
@@ -295,28 +347,21 @@ def analyze_message(message: str, max_retries: int = 3):
             guidance=None
         ).model_dump()
 
-    client = get_client()
+    
+    provider = os.getenv("AI_PROVIDER", "gemini").strip().lower()
 
-    model_name = os.getenv(
-        "GEMINI_MODEL",
-        "gemini-3.6-flash"
-    )
+    if provider == "deepseek":
+        call_model = call_deepseek
+    elif provider == "gemini":
+        call_model = call_gemini
+    else:
+        raise RuntimeError(
+            f"AI_PROVIDER غير معروف: '{provider}'. استخدم 'gemini' أو 'deepseek'."
+        )
 
     for attempt in range(max_retries):
         try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=message,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_PROMPT,
-                    response_mime_type="application/json",
-                    response_schema=ModelExtraction
-                )
-            )
-
-            extraction = ModelExtraction.model_validate_json(
-                response.text
-            )
+            extraction = call_model(message)
 
             result = AssistantResult(
                 **extraction.model_dump(),
