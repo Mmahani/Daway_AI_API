@@ -7,6 +7,11 @@ from openai import OpenAI
 from pydantic import BaseModel, Field
 
 
+class AIServiceError(Exception):
+    """Raised when the AI provider is temporarily unavailable."""
+    pass
+
+
 # =========================================================
 # 1. Pydantic Models
 # =========================================================
