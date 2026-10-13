@@ -1,10 +1,14 @@
 
 import os
 import time
+import logging
 from typing import Optional, Literal
 
 from openai import OpenAI
 from pydantic import BaseModel, Field
+
+
+logger = logging.getLogger("daway_ai_service")
 
 
 class AIServiceError(Exception):
@@ -34,27 +38,33 @@ class ModelExtraction(BaseModel):
     drug_name: Optional[str] = None
     symptoms: list[str] = Field(default_factory=list)
 
-    # Message to show the user if clarification is needed
+    # Clarification message, when needed
     user_message: str = ""
 
-    # Whether the backend needs the user's location
+    # Backend location requirement
     requires_location: bool = False
 
-    # Information requested by the user
+    # Requested information
     requested_information: list[str] = Field(default_factory=list)
 
-    # Extra search filters for the backend
+    # Explicit search filters
     filters: dict = Field(default_factory=dict)
 
-    # Maximum number of results requested
-    result_limit: int = 3
+    # Maximum requested results
+    result_limit: int = Field(default=3, ge=1, le=10)
 
-    # Whether the message indicates a possible emergency
+    # Possible emergency
     is_emergency: bool = False
 
 
 class AssistantResult(ModelExtraction):
-    # Local guidance, not generated medical advice
+    # Exact original message, set locally rather than by the LLM
+    raw_query: str
+
+    # Text suitable for display in the chat
+    reply: Optional[str] = None
+
+    # Local general guidance
     guidance: Optional[str] = None
 
 
@@ -95,8 +105,33 @@ SYMPTOM_GUIDANCE = {
     ),
     "ضيق تنفس": (
         "ضيق التنفس قد يكون حالة طارئة. إذا كان شديدًا أو مفاجئًا، "
-        "اطلب الإسعاف أو توجّه إلى الطوارئ فورًا."
+        "اطلب الإسعاف أو توجّه إلى أقرب قسم طوارئ فورًا."
     ),
+}
+
+# Common variants mapped to the canonical local guidance topic
+SYMPTOM_ALIASES = {
+    "كحة": "سعال",
+    "كحّة": "سعال",
+    "كحه": "سعال",
+    "سعال": "سعال",
+    "وجع راس": "صداع",
+    "وجع رأس": "صداع",
+    "راسي بوجعني": "صداع",
+    "صداع": "صداع",
+    "سخونة": "حرارة",
+    "حراره": "حرارة",
+    "حرارتي مرتفعة": "حرارة",
+    "حرارة": "حرارة",
+    "استفراغ": "تقيؤ",
+    "ترجيع": "تقيؤ",
+    "تقيؤ": "تقيؤ",
+    "وجع بطن": "ألم في البطن",
+    "بطني بتوجعني": "ألم في البطن",
+    "ألم في البطن": "ألم في البطن",
+    "ضيق النفس": "ضيق تنفس",
+    "مش قادر أتنفس": "ضيق تنفس",
+    "ضيق تنفس": "ضيق تنفس",
 }
 
 GENERIC_FALLBACK_GUIDANCE = (
@@ -105,42 +140,120 @@ GENERIC_FALLBACK_GUIDANCE = (
     "إذا ظهرت علامات خطيرة، اطلب المساعدة الطبية العاجلة."
 )
 
+EMERGENCY_REPLY = (
+    "قد تكون الأعراض التي وصفتها طارئة. إذا كنت تعاني ضيقًا شديدًا "
+    "أو مفاجئًا في التنفس، أو فقدانًا للوعي، أو أعراضًا خطيرة مفاجئة، "
+    "اطلب الإسعاف أو توجّه إلى أقرب قسم طوارئ فورًا. "
+    "لا تنتظر رد التطبيق."
+)
+
 
 def build_guidance(symptoms: list[str]) -> Optional[str]:
     if not symptoms:
         return None
 
-    parts = [
-        SYMPTOM_GUIDANCE.get(
-            symptom,
-            GENERIC_FALLBACK_GUIDANCE
+    parts = []
+
+    for symptom in symptoms:
+        canonical = SYMPTOM_ALIASES.get(symptom, symptom)
+        guidance = SYMPTOM_GUIDANCE.get(
+            canonical,
+            GENERIC_FALLBACK_GUIDANCE,
         )
-        for symptom in symptoms
-    ]
+        parts.append(guidance)
 
     # Remove duplicate guidance
     unique_parts = list(dict.fromkeys(parts))
-
     return " ".join(unique_parts)
 
 
 # =========================================================
-# 3. DeepSeek System Prompt
+# 3. Local Chat Replies
+# =========================================================
+
+def build_reply(result: AssistantResult) -> Optional[str]:
+    """
+    Builds a user-facing reply for intents that can be acknowledged
+    locally. Medicine facts, prices, availability, and pharmacy results
+    must still come from the backend.
+    """
+
+    if result.is_emergency:
+        return result.guidance or EMERGENCY_REPLY
+
+    if result.intent == "greeting":
+        return (
+            "أهلًا وسهلًا! أنا مساعد دوائي. "
+            "كيف بقدر أساعدك اليوم؟"
+        )
+
+    if result.intent == "unclear":
+        return result.user_message or (
+            "أكيد، بساعدك. ممكن توضح طلبك أكثر؟ "
+            "هل تريد البحث عن دواء، أو معرفة معلومات عنه، "
+            "أم تسأل عن أعراض صحية؟"
+        )
+
+    if result.intent == "out_of_scope":
+        return (
+            "أنا مساعد دوائي، وبقدر أساعدك في البحث عن الأدوية "
+            "ومعلوماتها العامة والإرشادات الصحية العامة. "
+            "لا أستطيع تشخيص الأمراض أو وصف علاج شخصي."
+        )
+
+    if result.intent == "symptom_guidance":
+        return result.guidance or GENERIC_FALLBACK_GUIDANCE
+
+    if result.intent == "search_medicine":
+        if result.drug_name:
+            return (
+                f"فهمت أنك تريد البحث عن {result.drug_name}. "
+                "سأحتاج إلى نتائج البحث من النظام لعرض المعلومات المتاحة."
+            )
+        return "ما اسم الدواء الذي تريد البحث عنه؟"
+
+    if result.intent == "pharmacy_locator":
+        return (
+            "سأحتاج إلى موقعك أو المنطقة التي تريد البحث فيها "
+            "حتى يتمكن النظام من تحديد الصيدليات القريبة."
+        )
+
+    if result.intent == "find_alternative":
+        if result.drug_name:
+            return (
+                f"فهمت أنك تبحث عن بديل لـ {result.drug_name}. "
+                "يجب التحقق من البدائل المناسبة ومراجعة مختص صحي "
+                "قبل تغيير الدواء."
+            )
+        return "ما اسم الدواء الذي تريد معرفة بدائله؟"
+
+    if result.intent == "drug_info":
+        if result.drug_name:
+            return (
+                f"فهمت أنك تريد معلومات عن {result.drug_name}. "
+                "سنعتمد على بيانات الدواء الموثوقة المتاحة في النظام."
+            )
+        return "ما اسم الدواء الذي تريد معرفة معلومات عنه؟"
+
+    return "لم أتمكن من تحديد طلبك بدقة. وضّح طلبك من فضلك."
+
+
+# =========================================================
+# 4. DeepSeek System Prompt
 # =========================================================
 
 SYSTEM_PROMPT = """
 You are the intent classification and entity extraction component
 of a medicine discovery application.
 
-Your job is ONLY to understand the user's request and return
-structured JSON. Do not search databases, invent medicine data,
-provide medicine prices, or invent pharmacy locations.
+Your task is to understand the user's request and return structured
+JSON only. Do not search databases, invent medicine data, provide
+medicine prices, or invent pharmacy locations.
 
 The backend performs database searches, retrieves prices and stock,
 and calculates distances.
 
-Return data matching this schema:
-
+Return JSON matching these fields:
 {
   "intent": "search_medicine",
   "drug_name": null,
@@ -154,140 +267,78 @@ Return data matching this schema:
 }
 
 INTENTS:
+- search_medicine: find, locate, or check availability of a medicine.
+- pharmacy_locator: nearby pharmacies without a specified medicine.
+- find_alternative: user explicitly asks for an alternative.
+- drug_info: asks for medicine uses or other specific medicine details.
+- symptom_guidance: describes symptoms and seeks general guidance.
+- greeting: simple greeting without a medical request.
+- unclear: request is too vague to classify reliably.
+- out_of_scope: unrelated requests, diagnosis, or personal prescribing.
 
-1. search_medicine:
-   The user wants to find, locate, or check availability of a medicine.
-
-2. pharmacy_locator:
-   The user primarily asks for nearby pharmacies without specifying
-   a medicine.
-
-3. find_alternative:
-   The user explicitly asks for an alternative to a named medicine.
-   Do not recommend an alternative yourself.
-
-4. drug_info:
-   The user asks about a medicine's uses, general information,
-   price, availability details, or other specific medicine information.
-
-5. symptom_guidance:
-   The user describes symptoms and seeks general guidance.
-
-6. greeting:
-   A simple greeting without a medical or medicine request.
-
-7. unclear:
-   The request is too vague to classify reliably.
-
-8. out_of_scope:
-   The request is unrelated to this application's supported functions,
-   or asks the AI to diagnose a disease or prescribe a treatment.
-
-IMPORTANT CLASSIFICATION RULES:
-
-- "وين بلاقي بنادول؟" -> search_medicine.
-- "هل بنادول متوفر؟" -> search_medicine.
-- "كم سعر بنادول؟" -> drug_info.
-- "شو استخدامات بنادول؟" -> drug_info.
-- "بدي أقرب صيدلية" -> pharmacy_locator.
-- "وين بلاقي بنادول قريب مني؟" -> search_medicine.
-- "بدي أقرب ثلاث صيدليات فيها بنادول" -> search_medicine.
-- "بدي بديل لبنادول" -> find_alternative.
-- "عندي صداع وحرارة" -> symptom_guidance.
-- "مرحبا" -> greeting.
-- "بدي دوا" -> unclear.
-- Requests for diagnosis or personalized treatment/prescribing
-  should not be answered as if a diagnosis were certain.
+CLASSIFICATION:
+- "وين بلاقي بنادول؟" -> search_medicine
+- "هل بنادول متوفر؟" -> search_medicine
+- "كم سعر بنادول؟" -> drug_info
+- "شو استخدامات بنادول؟" -> drug_info
+- "بدي أقرب صيدلية" -> pharmacy_locator
+- "وين بلاقي بنادول قريب مني؟" -> search_medicine
+- "بدي بديل لبنادول" -> find_alternative
+- "عندي صداع وحرارة" -> symptom_guidance
+- "مرحبا" -> greeting
+- "بدي دوا" -> unclear
 
 REQUESTED INFORMATION:
+Use applicable values:
+- medicine_details
+- price
+- availability
+- pharmacies
+- distance
+- alternatives
+- general_guidance
 
-Use one or more of these values when applicable:
-- "medicine_details"
-- "price"
-- "availability"
-- "pharmacies"
-- "distance"
-- "alternatives"
-- "general_guidance"
-
-Examples:
-- Asking for a medicine's price:
-  requested_information = ["price"]
-- Asking where to find a medicine:
-  requested_information = ["availability", "pharmacies", "distance"]
-- Asking about medicine uses:
-  requested_information = ["medicine_details"]
-- Asking for an alternative:
-  requested_information = ["alternatives"]
-
-LOCATION RULES:
-
-- requires_location = true when the request needs nearby results
-  or distance calculations.
-- If the user asks to find a medicine nearby, set it to true.
-- If the user only asks about medicine uses or price, set it to false
-  unless their request explicitly requires a location.
-- Never invent the user's location.
+LOCATION:
+Set requires_location=true when nearby results or distance calculations
+are requested. Never invent the user's location.
+For medicine uses or price alone, normally set it to false.
 
 RESULT LIMIT:
-
-- Use 3 by default for nearby pharmacy or medicine searches.
-- If the user explicitly requests a different number, use that number.
-- Keep result_limit between 1 and 10.
+Default 3. Respect an explicit requested number between 1 and 10.
 
 FILTERS:
-
-- Store only explicit, useful search filters in the filters object.
-- Do not invent values.
-- Use an empty object when there are no additional filters.
+Only explicit, useful search filters. Do not invent values.
 
 SYMPTOMS:
-
-Normalize colloquial Arabic symptoms to clear Arabic labels.
-Examples:
+Normalize colloquial Arabic symptoms to canonical Arabic labels:
 - "راسي بوجعني" -> "صداع"
 - "حرارتي مرتفعة" -> "حرارة"
 - "بطني بوجعني" -> "ألم في البطن"
 - "مش قادر أتنفس" -> "ضيق تنفس"
+- "كحة" or "كحّة" -> "سعال"
 
 EMERGENCY:
+Set is_emergency=true for signs that may indicate an immediate emergency,
+including severe or sudden difficulty breathing, loss of consciousness,
+or sudden severe neurological symptoms.
+Do not delay emergency guidance to ask follow-up questions.
 
-Set is_emergency = true only when the message describes signs
-that may indicate an immediate emergency, such as severe or sudden
-difficulty breathing, loss of consciousness, or sudden severe
-neurological symptoms.
-
-When is_emergency is true, do not delay emergency guidance
-to ask follow-up questions.
-
-OUTPUT RULES:
-
-- Return valid JSON only.
-- Do not include Markdown fences or additional commentary.
-- Do not fabricate medicine names if none were mentioned.
-- Use null for an unknown drug_name.
-- Use [] when there are no symptoms or requested information.
+OUTPUT:
+- Return valid JSON only, without Markdown.
+- Do not fabricate medicine names when none were mentioned.
+- Use null for unknown drug_name.
+- Use [] when no symptoms or requested information are present.
 - Use {} when there are no filters.
-- Use an empty string for user_message unless clarification is needed.
-- Do not make up prices, availability, pharmacy names, or distances.
+- Keep user_message empty unless clarification is needed.
+- Do not invent prices, availability, pharmacy names, or distances.
 """
 
 
 # =========================================================
-# 4. DeepSeek Client
+# 5. DeepSeek Client
 # =========================================================
 
 def get_deepseek_client() -> OpenAI:
-    """
-    Supports the existing Render variables:
-    AI_API_KEY
-    AI_BASE_URL
-
-    Also supports dedicated DeepSeek variables:
-    DEEPSEEK_API_KEY
-    DEEPSEEK_MODEL
-    """
-
     api_key = (
         os.getenv("DEEPSEEK_API_KEY")
         or os.getenv("AI_API_KEY")
@@ -313,7 +364,7 @@ def get_deepseek_client() -> OpenAI:
 
 
 # =========================================================
-# 5. Call DeepSeek
+# 6. Call DeepSeek
 # =========================================================
 
 def call_deepseek(message: str) -> ModelExtraction:
@@ -325,42 +376,51 @@ def call_deepseek(message: str) -> ModelExtraction:
         or "deepseek-chat"
     )
 
-    response = client.chat.completions.create(
-        model=model_name,
-        messages=[
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT,
-            },
-            {
-                "role": "user",
-                "content": message,
-            },
-        ],
-        response_format={"type": "json_object"},
-        temperature=0,
-    )
+    try:
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": message},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
 
-    raw_json = response.choices[0].message.content
+        raw_json = response.choices[0].message.content
 
-    if not raw_json:
-        raise RuntimeError("DeepSeek returned an empty response.")
+        if not raw_json:
+            raise AIServiceError("AI provider returned an empty response.")
 
-    return ModelExtraction.model_validate_json(raw_json)
+        return ModelExtraction.model_validate_json(raw_json)
+
+    except AIServiceError:
+        raise
+    except Exception as error:
+        error_text = str(error)
+        logger.exception("DeepSeek request failed")
+
+        if any(code in error_text for code in ("429", "502", "503", "504")):
+            raise AIServiceError(
+                "AI provider is temporarily unavailable."
+            ) from error
+
+        raise
 
 
 # =========================================================
-# 6. Main Analysis Function
+# 7. Main Analysis Function
 # =========================================================
 
 def analyze_message(
     message: str,
     max_retries: int = 3,
 ) -> dict:
-    message = str(message).strip()
+    raw_query = str(message)
+    normalized_message = raw_query.strip()
 
-    if not message:
-        return AssistantResult(
+    if not normalized_message:
+        result = AssistantResult(
             intent="unclear",
             drug_name=None,
             symptoms=[],
@@ -370,27 +430,29 @@ def analyze_message(
             filters={},
             result_limit=3,
             is_emergency=False,
+            raw_query=raw_query,
+            reply=None,
             guidance=None,
-        ).model_dump()
+        )
+        result.reply = build_reply(result)
+        return result.model_dump()
 
     last_error = None
 
     for attempt in range(max_retries):
         try:
-            extraction = call_deepseek(message)
+            extraction = call_deepseek(normalized_message)
 
             result = AssistantResult(
                 **extraction.model_dump(),
+                raw_query=raw_query,
+                reply=None,
                 guidance=None,
             )
 
-            # Emergency handling must take priority
+            # Emergency handling takes priority
             if result.is_emergency:
-                result.guidance = (
-                    "قد تكون هذه حالة طارئة. "
-                    "اطلب الإسعاف أو توجّه إلى أقرب قسم طوارئ فورًا. "
-                    "لا تنتظر رد التطبيق."
-                )
+                result.guidance = EMERGENCY_REPLY
 
             elif result.intent == "symptom_guidance":
                 result.guidance = build_guidance(result.symptoms)
@@ -398,18 +460,28 @@ def analyze_message(
                 if not result.guidance:
                     result.guidance = GENERIC_FALLBACK_GUIDANCE
 
+            # For unclear requests, always provide a clarification prompt
+            if result.intent == "unclear" and not result.user_message.strip():
+                result.user_message = (
+                    "وضح طلبك من فضلك. هل تريد البحث عن دواء، "
+                    "أو معرفة معلومات عنه، أم تسأل عن أعراض صحية؟"
+                )
+
+            # Create a user-facing reply locally
+            result.reply = build_reply(result)
+
             return result.model_dump()
+
+        except AIServiceError:
+            raise
 
         except Exception as error:
             last_error = error
             error_text = str(error)
 
-            # Retry temporary rate-limit/server errors only
-            is_temporary_error = (
-                "429" in error_text
-                or "503" in error_text
-                or "502" in error_text
-                or "504" in error_text
+            is_temporary_error = any(
+                code in error_text
+                for code in ("429", "502", "503", "504")
             )
 
             if is_temporary_error and attempt < max_retries - 1:
