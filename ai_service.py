@@ -8,7 +8,7 @@ from openai import OpenAI
 from pydantic import BaseModel, Field, field_validator
 
 
-logger = logging.getLogger("dawaak_ai_service")
+logger = logging.getLogger("daway_ai_service")
 
 
 class AIServiceError(Exception):

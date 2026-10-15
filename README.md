@@ -1,4 +1,4 @@
-# Dawaak AI Assistant API
+# Daway AI Assistant API
 
 FastAPI service that understands a user's pharmacy request (intent + entities)
 via DeepSeek and returns structured JSON. It does NOT search databases or
@@ -9,7 +9,7 @@ invent prices/pharmacies — the backend (e.g. Supabase) does that.
 - `GET /` — liveness: `{"status":"success",...}`
 - `GET /health` — health check for Render: `{"status":"ok","version":"1.1"}`
 - `POST /ai/assistant` — body `{"message":"وين بلاقي بنادول؟"}`
-  - Optional header `X-API-Key` — required only when `DAWAAK_API_KEY` is set.
+  - Optional header `X-API-Key` — required only when `DAWAY_API_KEY` is set.
   - Returns `{"source":"ai", intent, drug_name, symptoms, requires_location,
     requested_information, filters, result_limit, is_emergency,
     raw_query, reply, guidance}`.
@@ -40,7 +40,7 @@ Example (`search_medicine`):
 | `AI_MODEL` / `DEEPSEEK_MODEL` | no | `deepseek-chat` | Model |
 | `AI_TIMEOUT` | no | `15` | Seconds per AI call |
 | `AI_MAX_RETRIES` | no | `0` | OpenAI client retries (loop handles retry) |
-| `DAWAAK_API_KEY` (or `DAWAY_API_KEY`, `API_KEY`) | no | unset = open | Gate `POST /ai/assistant` |
+| `DAWAY_API_KEY` (or `API_KEY`) | no | unset = open | Gate `POST /ai/assistant` |
 
 ## Run locally
 
@@ -55,8 +55,8 @@ py -m uvicorn app:app --port 8000
 ## Docker / Render
 
 ```powershell
-docker build -t dawaak-ai .
-docker run -p 10000:10000 -e DEEPSEEK_API_KEY=... dawaak-ai
+docker build -t daway-ai .
+docker run -p 10000:10000 -e DEEPSEEK_API_KEY=... daway-ai
 ```
 
 Render: set env vars in dashboard, health check path `/health`.
