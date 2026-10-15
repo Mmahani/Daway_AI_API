@@ -1,4 +1,4 @@
-   fastapi
-   uvicorn
-   pydantic
-   openai
+fastapi==0.140.0
+uvicorn==0.51.0
+pydantic==2.13.4
+openai==2.48.0

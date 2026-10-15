@@ -5,7 +5,7 @@ import logging
 from typing import Optional, Literal
 
 from openai import OpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 logger = logging.getLogger("daway_ai_service")
@@ -50,8 +50,17 @@ class ModelExtraction(BaseModel):
     # Explicit search filters
     filters: dict = Field(default_factory=dict)
 
-    # Maximum requested results
-    result_limit: int = Field(default=3, ge=1, le=10)
+    # Maximum requested results (clamped 1-10 so LLM slips don't cause 503)
+    result_limit: int = Field(default=3)
+
+    @field_validator("result_limit", mode="before")
+    @classmethod
+    def clamp_result_limit(cls, v):
+        try:
+            v = int(v)
+        except (TypeError, ValueError):
+            return 3
+        return max(1, min(10, v))
 
     # Possible emergency
     is_emergency: bool = False
@@ -358,8 +367,8 @@ def get_deepseek_client() -> OpenAI:
     return OpenAI(
         api_key=api_key,
         base_url=base_url,
-        timeout=float(os.getenv("AI_TIMEOUT", "30")),
-        max_retries=int(os.getenv("AI_MAX_RETRIES", "2")),
+        timeout=float(os.getenv("AI_TIMEOUT", "15")),
+        max_retries=int(os.getenv("AI_MAX_RETRIES", "0")),
     )
 
 
@@ -400,12 +409,17 @@ def call_deepseek(message: str) -> ModelExtraction:
         error_text = str(error)
         logger.exception("DeepSeek request failed")
 
-        if any(code in error_text for code in ("429", "502", "503", "504")):
+        if any(
+            code in error_text for code in ("429", "502", "503", "504")
+        ) or any(
+            word in error_text.lower()
+            for word in ("timeout", "overloaded", "temporarily")
+        ):
             raise AIServiceError(
-                "AI provider is temporarily unavailable."
+                f"AI provider is temporarily unavailable: {error_text[:200]}"
             ) from error
 
-        raise
+        raise AIServiceError(str(error)) from error
 
 
 # =========================================================
@@ -414,7 +428,7 @@ def call_deepseek(message: str) -> ModelExtraction:
 
 def analyze_message(
     message: str,
-    max_retries: int = 3,
+    max_retries: int = 2,
 ) -> dict:
     raw_query = str(message)
     normalized_message = raw_query.strip()
@@ -472,7 +486,16 @@ def analyze_message(
 
             return result.model_dump()
 
-        except AIServiceError:
+        except AIServiceError as error:
+            last_error = error
+            error_text = str(error)
+            is_temporary = (
+                any(code in error_text for code in ("429", "502", "503", "504"))
+                or "temporarily unavailable" in error_text.lower()
+            )
+            if is_temporary and attempt < max_retries - 1:
+                time.sleep((attempt + 1) * 2)
+                continue
             raise
 
         except Exception as error:
@@ -485,10 +508,10 @@ def analyze_message(
             )
 
             if is_temporary_error and attempt < max_retries - 1:
-                time.sleep((attempt + 1) * 3)
+                time.sleep((attempt + 1) * 2)
                 continue
 
-            raise
+            raise AIServiceError(str(error)) from error
 
     if last_error:
         raise last_error
