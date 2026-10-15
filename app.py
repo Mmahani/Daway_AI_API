@@ -8,14 +8,14 @@ from pydantic import BaseModel, StringConstraints
 from ai_service import analyze_message, AIServiceError
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("daway_api")
+logger = logging.getLogger("dawaak_api")
 
 app = FastAPI(
-    title="Daway AI Assistant API",
+    title="Dawaak AI Assistant API",
     version="1.1"
 )
 
-API_KEY = os.getenv("DAWAY_API_KEY") or os.getenv("API_KEY")
+API_KEY = os.getenv("DAWAAK_API_KEY") or os.getenv("DAWAY_API_KEY") or os.getenv("API_KEY")
 
 
 def check_api_key(x_api_key: str | None) -> None:
@@ -31,7 +31,7 @@ class MessageRequest(BaseModel):
 def home():
     return {
         "status": "success",
-        "message": "Daway AI Assistant API is running"
+        "message": "Dawaak AI Assistant API is running"
     }
 
 
