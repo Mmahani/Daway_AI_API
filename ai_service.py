@@ -276,26 +276,37 @@ Return JSON matching these fields:
 }
 
 INTENTS:
-- search_medicine: find, locate, or check availability of a medicine.
+- search_medicine: find, locate, or check availability of a medicine (by name, brand, or generic).
 - pharmacy_locator: nearby pharmacies without a specified medicine.
-- find_alternative: user explicitly asks for an alternative.
-- drug_info: asks for medicine uses or other specific medicine details.
+- find_alternative: user explicitly asks for an alternative to a medicine.
+- drug_info: asks for medicine uses, dosage info, price, or general details.
 - symptom_guidance: describes symptoms and seeks general guidance.
 - greeting: simple greeting without a medical request.
 - unclear: request is too vague to classify reliably.
 - out_of_scope: unrelated requests, diagnosis, or personal prescribing.
 
-CLASSIFICATION:
-- "وين بلاقي بنادول؟" -> search_medicine
-- "هل بنادول متوفر؟" -> search_medicine
-- "كم سعر بنادول؟" -> drug_info
-- "شو استخدامات بنادول؟" -> drug_info
+DRUG NAME RULES (CRITICAL):
+- Accept medicine names in ANY form: Arabic, English, or mixed (e.g. بنادول, Panadol, Brufen, ibuprofen, Voltaren).
+- If the user writes ONLY a medicine/brand name (e.g. "Brufen", "Panadol", "بنادول") -> set intent = "search_medicine", drug_name = the exact name as written (keep original casing/spaces).
+- If the user says "بدي أبحث عن Brufen" or "وين بلاقي Panadol" -> intent = "search_medicine", drug_name = "Brufen"/"Panadol".
+- Do NOT ask the user to retype, spell, or rewrite the medicine name. Extract it directly.
+- Do NOT guess drug names not mentioned.
+- Keep brand names as-is. Do not translate English brand names to Arabic.
+
+CLASSIFICATION EXAMPLES:
+- "Brufen" -> search_medicine, drug_name:"Brufen", requested_information:["availability","pharmacies"]
+- "Panadol" -> search_medicine, drug_name:"Panadol", requested_information:["availability","pharmacies"]
+- "b  Panadol" or "وين بلاقي Panadol" -> search_medicine, drug_name:"Panadol"
+- "وين بلاقي بنادول؟" -> search_medicine, drug_name:"بنادول"
+- "هل بنادول متوفر؟" -> search_medicine, drug_name:"بنادol"
+- "كم سعر بنادول؟" -> drug_info, drug_name:"بنادول", requested_information:["price"]
+- "بدي بديل لبنادول" -> find_alternative, drug_name:"بنادول", requested_information:["alternatives"]
+- "عندي صداع" -> symptom_guidance, symptoms:["صداع"]
+- "عندي صداع وحرارة" -> symptom_guidance, symptoms:["صداع","حرارة"]
+- "صداع" -> symptom_guidance, symptoms:["صداع"]
 - "بدي أقرب صيدلية" -> pharmacy_locator
-- "وين بلاقي بنادول قريب مني؟" -> search_medicine
-- "بدي بديل لبنادول" -> find_alternative
-- "عندي صداع وحرارة" -> symptom_guidance
 - "مرحبا" -> greeting
-- "بدي دوا" -> unclear
+- "بدي دوا" -> unclear (only if NO specific drug name or symptoms are mentioned)
 
 REQUESTED INFORMATION:
 Use applicable values:
@@ -308,38 +319,37 @@ Use applicable values:
 - general_guidance
 
 LOCATION:
-Set requires_location=true when nearby results or distance calculations
-are requested. Never invent the user's location.
-For medicine uses or price alone, normally set it to false.
+- Set requires_location=true when user wants nearby results/pharmacies or "قريب مني".
+- For general price/uses of a medicine, usually false unless explicitly says "قريب مني".
+- Never invent location.
 
 RESULT LIMIT:
-Default 3. Respect an explicit requested number between 1 and 10.
+Default 3. Respect explicit number between 1 and 10.
 
 FILTERS:
 Only explicit, useful search filters. Do not invent values.
 
 SYMPTOMS:
-Normalize colloquial Arabic symptoms to canonical Arabic labels:
-- "راسي بوجعني" -> "صداع"
-- "حرارتي مرتفعة" -> "حرارة"
-- "بطني بوجعني" -> "ألم في البطن"
-- "مش قادر أتنفس" -> "ضيق تنفس"
-- "كحة" or "كحّة" -> "سعال"
+Normalize colloquial Arabic to canonical Arabic labels:
+- "راسي بوجعني", "وجع راس", "وجع رأس" -> "صداع"
+- "حرارتي مرتفعة", "سخونة" -> "حرارة"
+- "بطني بوجعني", "وجع بطن" -> "ألم في البطن"
+- "مش قادر أتنفس", "ضيق النفس" -> "ضيق تنفس"
+- "كحة", "كحّة" -> "سعال"
+- "دوخة" -> "دوخة"
+- "تقيؤ", "استفراغ" -> "تقيؤ"
 
 EMERGENCY:
-Set is_emergency=true for signs that may indicate an immediate emergency,
-including severe or sudden difficulty breathing, loss of consciousness,
-or sudden severe neurological symptoms.
-Do not delay emergency guidance to ask follow-up questions.
+Set is_emergency=true for severe/sudden difficulty breathing, loss of consciousness, or sudden severe neurological symptoms. Prioritize emergency guidance.
 
 OUTPUT:
-- Return valid JSON only, without Markdown.
-- Do not fabricate medicine names when none were mentioned.
-- Use null for unknown drug_name.
-- Use [] when no symptoms or requested information are present.
-- Use {} when there are no filters.
-- Keep user_message empty unless clarification is needed.
-- Do not invent prices, availability, pharmacy names, or distances.
+- Return valid JSON only, no Markdown/fences
+- Do not fabricate medicine names
+- Use null for unknown drug_name
+- Use [] if no symptoms/requested_information
+- Use {} if no filters
+- user_message empty unless truly ambiguous and needs clarification
+- Never ask user to "rewrite", "correct", or "re-enter" the drug name
 """
 
 
