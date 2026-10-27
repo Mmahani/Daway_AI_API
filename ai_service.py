@@ -315,7 +315,7 @@ CRITICAL RULES:
 - If user says "عندي صداع", "عندي ألم في الرأس", "عندي صداع وحرارة" -> symptom_guidance, extract symptoms.
 - If user says "كم سعر X" or "شو استخدامات X" -> drug_info with drug_name X.
 - If user says "بدي بديل لـ X" -> find_alternative with drug_name X.
-- If user says "مرحبا", "أهلا", "السلام عليكم" -> greeting.
+- If user says "مرحبا", "أهلا", "أهلاً وسهلاً", "السلام عليكم", "صباح الخير", "مساء الخير", "هلا", "هاي" -> greeting.
 - If user says "بدي دوا" alone with no name/symptoms -> unclear.
 - Do NOT ask user to retype or rewrite names. Extract them as-is.
 - Normalize symptoms to Arabic: "راسي بوجعني"->"صداع", "حرارتي مرتفعة"->"حرارة", "بطني بوجعني"->"ألم في البطن", "مش قادر أتنفس"->"ضيق تنفس", "كحة"->"سعال".
