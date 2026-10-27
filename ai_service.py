@@ -157,6 +157,20 @@ EMERGENCY_REPLY = (
 )
 
 
+def build_guidance(symptoms: list[str]) -> Optional[str]:
+    if not symptoms:
+        return None
+
+    parts = []
+    for symptom in symptoms:
+        canonical = SYMPTOM_ALIASES.get(symptom, symptom)
+        guidance = SYMPTOM_GUIDANCE.get(canonical, GENERIC_FALLBACK_GUIDANCE)
+        parts.append(guidance)
+
+    unique_parts = list(dict.fromkeys(parts))
+    return " ".join(unique_parts)
+
+
 def extract_symptoms_local(text: str) -> list[str]:
     t = text.lower()
     symptoms = []
@@ -174,7 +188,6 @@ def extract_symptoms_local(text: str) -> list[str]:
         symptoms.append("دوخة")
     if any(x in t for x in ["تقيؤ", "استفراغ", "ترجيع"]):
         symptoms.append("تقيؤ")
-    # deduplicate while preserving order
     seen = set()
     out = []
     for s in symptoms:
@@ -182,22 +195,6 @@ def extract_symptoms_local(text: str) -> list[str]:
             out.append(s)
             seen.add(s)
     return out
-    if not symptoms:
-        return None
-
-    parts = []
-
-    for symptom in symptoms:
-        canonical = SYMPTOM_ALIASES.get(symptom, symptom)
-        guidance = SYMPTOM_GUIDANCE.get(
-            canonical,
-            GENERIC_FALLBACK_GUIDANCE,
-        )
-        parts.append(guidance)
-
-    # Remove duplicate guidance
-    unique_parts = list(dict.fromkeys(parts))
-    return " ".join(unique_parts)
 
 
 # =========================================================
@@ -428,6 +425,43 @@ def analyze_message(
             drug_name=None,
             symptoms=[],
             user_message="وضح طلبك من فضلك.",
+            requires_location=False,
+            requested_information=[],
+            filters={},
+            result_limit=3,
+            is_emergency=False,
+            raw_query=raw_query,
+            reply=None,
+            guidance=None,
+        )
+        result.reply = build_reply(result)
+        return result.model_dump()
+
+    # Local greeting fallback first (to avoid 503s on some greetings)
+    tmsg = normalized_message.lower()
+    greeting_patterns = [
+        "صباح الخير",
+        "مساء الخير",
+        "السلام عليكم",
+        "وعليكم السلام",
+        "السلام",
+        "مرحبا",
+        "مرحباً",
+        "أهلا",
+        "أهلاً",
+        "اهلا",
+        "هلا",
+        "هاي",
+        "hi",
+        "hello",
+        "hey",
+    ]
+    if any(p in tmsg for p in greeting_patterns) and len(normalized_message) <= 30:
+        result = AssistantResult(
+            intent="greeting",
+            drug_name=None,
+            symptoms=[],
+            user_message="",
             requires_location=False,
             requested_information=[],
             filters={},
