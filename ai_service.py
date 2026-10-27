@@ -298,7 +298,7 @@ CLASSIFICATION EXAMPLES:
 - "Panadol" -> search_medicine, drug_name:"Panadol", requested_information:["availability","pharmacies"]
 - "b  Panadol" or "وين بلاقي Panadol" -> search_medicine, drug_name:"Panadol"
 - "وين بلاقي بنادول؟" -> search_medicine, drug_name:"بنادول"
-- "هل بنادول متوفر؟" -> search_medicine, drug_name:"بنادol"
+- "هل بنادول متوفر؟" -> search_medicine, drug_name:"بنادول"
 - "كم سعر بنادول؟" -> drug_info, drug_name:"بنادول", requested_information:["price"]
 - "بدي بديل لبنادول" -> find_alternative, drug_name:"بنادول", requested_information:["alternatives"]
 - "عندي صداع" -> symptom_guidance, symptoms:["صداع"]
