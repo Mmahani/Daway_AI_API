@@ -429,8 +429,16 @@ def analyze_message(
                 guidance=None,
             )
 
-            # Emergency handling takes priority
-            if result.is_emergency:
+            if result.symptoms and result.intent in ("unclear", "greeting"):
+                result.intent = "symptom_guidance"
+            if result.drug_name and result.intent in ("unclear", "greeting"):
+                result.intent = "search_medicine"
+
+            # Fallback: if symptoms mentioned but misclassified
+            if result.intent not in ["symptom_guidance", "search_medicine", "find_alternative", "drug_info"] and result.symptoms:
+                result.intent = "symptom_guidance"
+            elif result.intent == "unclear" and result.symptoms:
+                result.intent = "symptom_guidance"
                 result.guidance = EMERGENCY_REPLY
 
             elif result.intent == "symptom_guidance":
