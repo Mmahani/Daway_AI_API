@@ -157,7 +157,31 @@ EMERGENCY_REPLY = (
 )
 
 
-def build_guidance(symptoms: list[str]) -> Optional[str]:
+def extract_symptoms_local(text: str) -> list[str]:
+    t = text.lower()
+    symptoms = []
+    if any(x in t for x in ["صداع", "راسي", "راس بوجعني", "وجع راس", "وجع رأس"]):
+        symptoms.append("صداع")
+    if any(x in t for x in ["حرارة", "سخونة", "حرارتي"]):
+        symptoms.append("حرارة")
+    if any(x in t for x in ["الم في البطن", "ألم في البطن", "بطني بوجعني", "وجع بطن"]):
+        symptoms.append("ألم في البطن")
+    if any(x in t for x in ["ضيق تنفس", "ضيق النفس", "مش قادر اتنفس", "صعوبة تنفس"]):
+        symptoms.append("ضيق تنفس")
+    if any(x in t for x in ["كحة", "كح", "سعال"]):
+        symptoms.append("سعال")
+    if "دوخة" in t:
+        symptoms.append("دوخة")
+    if any(x in t for x in ["تقيؤ", "استفراغ", "ترجيع"]):
+        symptoms.append("تقيؤ")
+    # deduplicate while preserving order
+    seen = set()
+    out = []
+    for s in symptoms:
+        if s not in seen:
+            out.append(s)
+            seen.add(s)
+    return out
     if not symptoms:
         return None
 
